@@ -5,6 +5,6 @@
   },
   "deploy": {
     "startCommand": "deno run --allow-net --allow-env main.ts",
-    "restartPolicy": "ALWAYS"
+    "restartPolicyType": "ALWAYS"
   }
 }
