@@ -1,0 +1,113 @@
+const cookieJar = new Map();
+
+function getCookies(host) { return cookieJar.get(host) || ""; }
+
+function setCookies(host, setCookieHeaders) {
+  if (!setCookieHeaders) return;
+  const prev = cookieJar.get(host) || "";
+  let newCookies = prev ? prev + "; " : "";
+  const cookies = Array.isArray(setCookieHeaders) ? setCookieHeaders : [setCookieHeaders];
+  for (const c of cookies) {
+    if (!c?.trim()) continue;
+    const value = c.split(';')[0].trim();
+    if (value) newCookies += (newCookies.endsWith("; ") ? "" : "; ") + value;
+  }
+  if (newCookies) cookieJar.set(host, newCookies);
+}
+
+function extractTarget(reqUrl) {
+  const url = new URL(reqUrl);
+  let path = url.pathname.slice(1);
+  if (path.startsWith("http://") || path.startsWith("https://")) {
+    return safeDecode(path);
+  }
+  const fullUrl = reqUrl;
+  const urlMatch = fullUrl.match(/url=([^#]+)/i);
+  let targetStr = urlMatch ? urlMatch[1] : url.searchParams.get("url");
+  if (targetStr) return safeDecode(targetStr);
+  return null;
+}
+
+function safeDecode(v) {
+  if (!v) return null;
+  let decoded = v.trim();
+  for (let i = 0; i < 3; i++) {
+    try {
+      const temp = decodeURIComponent(decoded);
+      if (temp === decoded) break;
+      decoded = temp;
+    } catch { break; }
+  }
+  try { return new URL(decoded).href; } 
+  catch { try { return new URL(v).href; } catch { return null; } }
+}
+
+Deno.serve(async (request) => {
+  try {
+    const reqUrl = request.url;
+    const url = new URL(reqUrl);
+
+    const fakeIp = url.searchParams.get("ip") || url.searchParams.get("IP");
+    const targetHref = extractTarget(reqUrl);
+
+    if (!targetHref) {
+      return new Response("Использование: ?url=http://ip:port/stream&ip=1.2.3.4", { status: 400 });
+    }
+
+    const target = new URL(targetHref);
+    const host = target.host;
+
+    const headers = new Headers();
+    headers.set("Host", host);
+    headers.set("User-Agent", "Mozilla/5.0 (QtEmbedded; U; Linux; C) AppleWebKit/533.3 (KHTML, like Gecko) MAG250 stbapp ver: 2 rev: 250 Safari/533.3");
+    headers.set("Accept", "*/*");
+    headers.set("Connection", "keep-alive");
+    headers.set("Referer", `${target.protocol}//${host}/`);
+
+    if (fakeIp) {
+      const ip = fakeIp.trim();
+      headers.set("X-Forwarded-For", ip);
+      headers.set("X-Real-IP", ip);
+      headers.set("Client-IP", ip);
+      headers.set("True-Client-IP", ip);
+      headers.set("Forwarded", `for=${ip}`);
+    }
+
+    const response = await fetch(target.href, {
+      method: request.method,
+      headers,
+      body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body,
+      redirect: "manual",
+    });
+
+    const responseHeaders = new Headers(response.headers);
+
+    const setCookie = responseHeaders.getSetCookie?.() || responseHeaders.get("set-cookie");
+    if (setCookie) setCookies(host, setCookie);
+
+    if (response.status >= 400) {
+      console.log(`[${new Date().toISOString()}] ${response.status} | ${target.href} | IP:${fakeIp || 'real'}`);
+    }
+
+    responseHeaders.set("Access-Control-Allow-Origin", "*");
+    responseHeaders.set("Access-Control-Allow-Headers", "*");
+    responseHeaders.set("Access-Control-Allow-Methods", "*");
+
+    const location = responseHeaders.get("location");
+    if (location) {
+      let absolute = location;
+      try { absolute = new URL(location, target.href).href; } catch {}
+      const newLoc = `${url.origin}/?url=${encodeURIComponent(absolute)}${fakeIp ? `&ip=${fakeIp}` : ""}`;
+      responseHeaders.set("location", newLoc);
+    }
+
+    return new Response(response.body, {
+      status: response.status,
+      headers: responseHeaders,
+    });
+
+  } catch (err) {
+    console.error(err);
+    return new Response("Proxy error", { status: 502 });
+  }
+});
