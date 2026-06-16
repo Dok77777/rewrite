@@ -1,30 +1,49 @@
 const cookieJar = new Map();
 
-function getCookies(host) { return cookieJar.get(host) || ""; }
+/* =========================
+   COOKIES
+========================= */
+function getCookies(host) {
+  return cookieJar.get(host) || "";
+}
 
 function setCookies(host, setCookieHeaders) {
   if (!setCookieHeaders) return;
   const prev = cookieJar.get(host) || "";
   let newCookies = prev ? prev + "; " : "";
+
   const cookies = Array.isArray(setCookieHeaders) ? setCookieHeaders : [setCookieHeaders];
   for (const c of cookies) {
     if (!c?.trim()) continue;
     const value = c.split(';')[0].trim();
-    if (value) newCookies += (newCookies.endsWith("; ") ? "" : "; ") + value;
+    if (value) {
+      newCookies += (newCookies.endsWith("; ") ? "" : "; ") + value;
+    }
   }
   if (newCookies) cookieJar.set(host, newCookies);
 }
 
+/* =========================
+   TARGET EXTRACTOR (обновлённая)
+========================= */
 function extractTarget(reqUrl) {
   const url = new URL(reqUrl);
+
+  // Mode 1: Path-based (/http://... или /https://...)
   let path = url.pathname.slice(1);
   if (path.startsWith("http://") || path.startsWith("https://")) {
     return safeDecode(path);
   }
+
+  // Mode 2: ?url=...
   const fullUrl = reqUrl;
   const urlMatch = fullUrl.match(/url=([^#]+)/i);
   let targetStr = urlMatch ? urlMatch[1] : url.searchParams.get("url");
-  if (targetStr) return safeDecode(targetStr);
+
+  if (targetStr) {
+    return safeDecode(targetStr);
+  }
+
   return null;
 }
 
@@ -38,10 +57,16 @@ function safeDecode(v) {
       decoded = temp;
     } catch { break; }
   }
-  try { return new URL(decoded).href; } 
-  catch { try { return new URL(v).href; } catch { return null; } }
+  try { 
+    return new URL(decoded).href; 
+  } catch { 
+    try { return new URL(v).href; } catch { return null; } 
+  }
 }
 
+/* =========================
+   SERVER
+========================= */
 Deno.serve(async (request) => {
   try {
     const reqUrl = request.url;
@@ -51,7 +76,10 @@ Deno.serve(async (request) => {
     const targetHref = extractTarget(reqUrl);
 
     if (!targetHref) {
-      return new Response("Использование: ?url=http://ip:port/stream&ip=1.2.3.4", { status: 400 });
+      return new Response(
+        "Использование: ?url=https://example.com/stream&ip=1.2.3.4", 
+        { status: 400 }
+      );
     }
 
     const target = new URL(targetHref);
@@ -85,14 +113,17 @@ Deno.serve(async (request) => {
     const setCookie = responseHeaders.getSetCookie?.() || responseHeaders.get("set-cookie");
     if (setCookie) setCookies(host, setCookie);
 
+    // Debug для ошибок
     if (response.status >= 400) {
-      console.log(`[${new Date().toISOString()}] ${response.status} | ${target.href} | IP:${fakeIp || 'real'}`);
+      console.log(`[${new Date().toISOString()}] ${response.status} | ${target.href} | IP: ${fakeIp || 'real'}`);
     }
 
+    // CORS
     responseHeaders.set("Access-Control-Allow-Origin", "*");
     responseHeaders.set("Access-Control-Allow-Headers", "*");
     responseHeaders.set("Access-Control-Allow-Methods", "*");
 
+    // Redirect fix
     const location = responseHeaders.get("location");
     if (location) {
       let absolute = location;
@@ -108,6 +139,6 @@ Deno.serve(async (request) => {
 
   } catch (err) {
     console.error(err);
-    return new Response("Proxy error", { status: 502 });
+    return new Response("Proxy error: " + err.message, { status: 502 });
   }
 });
