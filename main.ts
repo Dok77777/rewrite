@@ -24,21 +24,26 @@ function setCookies(host, setCookieHeaders) {
 }
 
 /* =========================
-   TARGET EXTRACTOR (обновлённая)
+   TARGET EXTRACTOR — ИСПРАВЛЕННЫЙ
 ========================= */
 function extractTarget(reqUrl) {
   const url = new URL(reqUrl);
 
-  // Mode 1: Path-based (/http://... или /https://...)
+  // Mode 1: Path-based
   let path = url.pathname.slice(1);
   if (path.startsWith("http://") || path.startsWith("https://")) {
     return safeDecode(path);
   }
 
-  // Mode 2: ?url=...
-  const fullUrl = reqUrl;
-  const urlMatch = fullUrl.match(/url=([^#]+)/i);
-  let targetStr = urlMatch ? urlMatch[1] : url.searchParams.get("url");
+  // Mode 2: ?url=... — улучшенный парсинг
+  let targetStr = url.searchParams.get("url");
+
+  // Если searchParams не сработал (из-за & в URL)
+  if (!targetStr || !targetStr.includes("://")) {
+    const fullUrl = reqUrl;
+    const match = fullUrl.match(/url=([^&]+)/i);   // берём до первого &
+    if (match) targetStr = match[1];
+  }
 
   if (targetStr) {
     return safeDecode(targetStr);
@@ -113,17 +118,14 @@ Deno.serve(async (request) => {
     const setCookie = responseHeaders.getSetCookie?.() || responseHeaders.get("set-cookie");
     if (setCookie) setCookies(host, setCookie);
 
-    // Debug для ошибок
     if (response.status >= 400) {
       console.log(`[${new Date().toISOString()}] ${response.status} | ${target.href} | IP: ${fakeIp || 'real'}`);
     }
 
-    // CORS
     responseHeaders.set("Access-Control-Allow-Origin", "*");
     responseHeaders.set("Access-Control-Allow-Headers", "*");
     responseHeaders.set("Access-Control-Allow-Methods", "*");
 
-    // Redirect fix
     const location = responseHeaders.get("location");
     if (location) {
       let absolute = location;
